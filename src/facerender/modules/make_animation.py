@@ -97,6 +97,11 @@ def keypoint_transformation(kp_canonical, he, wo_exp=False):
 
     return {'value': kp_transformed}
 
+def get_L1_distance(kp_source, kp_driving):
+    # calculate L1 distance of kp_source and kp_driving
+    diff = torch.abs(kp_source['value'] - kp_driving['value'])
+    diff = torch.mean(diff)
+    return diff
 
 
 def make_animation(source_image, source_semantics, target_semantics,
@@ -109,10 +114,23 @@ def make_animation(source_image, source_semantics, target_semantics,
         kp_canonical = kp_detector(source_image)
         he_source = mapping(source_semantics)
         kp_source = keypoint_transformation(kp_canonical, he_source)
-    
+
+        step = 0
+        maxStep = 4
+        previousOut = None
+        best_kp_norm = None
+        best_kp_source = None
+        best_dis = None
+        enable_mine = True
+        # enable_mine = False
         for frame_idx in tqdm(range(target_semantics.shape[1]), 'Face Renderer:'):
+            # step += 1
+            # if step % maxStep != 1:
+            #     predictions.append(previousOut['prediction'])
+            #     continue
             # still check the dimension
             # print(target_semantics.shape, source_semantics.shape)
+
             target_semantics_frame = target_semantics[:, frame_idx]
             he_driving = mapping(target_semantics_frame)
             if yaw_c_seq is not None:
@@ -125,7 +143,28 @@ def make_animation(source_image, source_semantics, target_semantics,
             kp_driving = keypoint_transformation(kp_canonical, he_driving)
                 
             kp_norm = kp_driving
-            out = generator(source_image, kp_source=kp_source, kp_driving=kp_norm)
+
+            if enable_mine:
+                step += 1
+                if step % maxStep != 1:
+                    predictions.append(previousOut['prediction'])
+                    diff = get_L1_distance(kp_source, kp_norm)
+                    if(diff > best_dis):
+                        best_dis = diff
+                        best_kp_norm = kp_norm
+                        best_kp_source = kp_source
+                    continue
+                else:
+                    if best_dis is None:
+                        out = generator(source_image, kp_source=kp_source, kp_driving=kp_norm)
+                        best_dis = get_L1_distance(kp_norm, kp_norm)
+                    else:
+                        out = generator(source_image, kp_source=best_kp_source, kp_driving=best_kp_norm)
+                        best_dis = get_L1_distance(kp_norm, kp_norm)
+                    previousOut = out 
+            else:
+                out = generator(source_image, kp_source=kp_source, kp_driving=kp_norm)
+
             '''
             source_image_new = out['prediction'].squeeze(1)
             kp_canonical_new =  kp_detector(source_image_new)
@@ -136,6 +175,7 @@ def make_animation(source_image, source_semantics, target_semantics,
             '''
             predictions.append(out['prediction'])
         predictions_ts = torch.stack(predictions, dim=1)
+
     return predictions_ts
 
 class AnimateModel(torch.nn.Module):
